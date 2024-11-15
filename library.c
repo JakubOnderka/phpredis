@@ -1122,12 +1122,12 @@ int redis_cmd_append_sstr_key_zstr(smart_string *dst, zend_string *key, RedisSoc
 }
 
 int redis_cmd_append_sstr_key_zval(smart_string *dst, zval *zv, RedisSock *redis_sock, short *slot) {
-    zend_string *key;
+    zend_string *key, *tmp_str;
     int res;
 
-    key = zval_get_string(zv);
+    key = zval_get_tmp_string(zv, &tmp_str);
     res = redis_cmd_append_sstr_key_zstr(dst, key, redis_sock, slot);
-    zend_string_release(key);
+    zend_tmp_string_release(tmp_str);
 
     return res;
 }

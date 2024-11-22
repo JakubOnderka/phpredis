@@ -37,6 +37,7 @@
 
 
 void redis_register_persistent_resource(zend_string *id, void *ptr, int le_id);
+void redis_init_interned_strings();
 void free_reply_callbacks(RedisSock *redis_sock);
 
 PHP_REDIS_API int redis_extract_auth_info(zval *ztest, zend_string **user, zend_string **pass);
@@ -59,6 +60,8 @@ PHP_REDIS_API int redis_spprintf(RedisSock *redis_sock, short *slot, char **ret,
 PHP_REDIS_API zend_string *redis_pool_spprintf(RedisSock *redis_sock, char *fmt, ...);
 
 PHP_REDIS_API char *redis_sock_read(RedisSock *redis_sock, int *buf_len);
+PHP_REDIS_API zend_string *redis_sock_read_zstr(RedisSock *redis_sock);
+PHP_REDIS_API zend_string *redis_sock_read_zstr_ex(RedisSock *redis_sock, int *buf_len);
 PHP_REDIS_API int redis_sock_gets(RedisSock *redis_sock, char *buf, int buf_size, size_t* line_len);
 PHP_REDIS_API int redis_1_response(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock, zval *z_tab, void *ctx);
 PHP_REDIS_API int redis_long_response(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock, zval* z_tab, void *ctx);

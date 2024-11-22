@@ -748,7 +748,8 @@ PS_UPDATE_TIMESTAMP_FUNC(redis)
  */
 PS_READ_FUNC(redis)
 {
-    char *resp, *cmd, *compressed_buf;
+    zend_string *resp;
+    char *cmd, *compressed_buf;
     int resp_len, cmd_len, compressed_free;
     const char *skey = ZSTR_VAL(key);
     size_t skeylen = ZSTR_LEN(key), compressed_len;
@@ -792,22 +793,23 @@ PS_READ_FUNC(redis)
     /* Read response from Redis.  If we get a NULL response from redis_sock_read
      * this can indicate an error, OR a "NULL bulk" reply (empty session data)
      * in which case we can reply with success. */
-    if ((resp = redis_sock_read(redis_sock, &resp_len)) == NULL && resp_len != -1) {
+    if ((resp = redis_sock_read_zstr_ex(redis_sock, &resp_len)) == NULL && resp_len != -1) {
         php_error_docref(NULL, E_WARNING, "Error communicating with Redis server");
         return FAILURE;
     }
 
-    if (resp_len < 0) {
+    if (resp == NULL || ZSTR_LEN(resp) == 0) {
         *val = ZSTR_EMPTY_ALLOC();
     } else {
-        compressed_free = session_uncompress_data(redis_sock, resp, resp_len, &compressed_buf, &compressed_len);
-        *val = zend_string_init(compressed_buf, compressed_len, 0);
+        compressed_free = session_uncompress_data(redis_sock, ZSTR_VAL(resp), ZSTR_LEN(resp), &compressed_buf, &compressed_len);
         if (compressed_free) {
+            zend_string_efree(resp);
+            *val = zend_string_init(compressed_buf, compressed_len, 0);
             efree(compressed_buf); // Free the buffer allocated by redis_uncompress
+        } else {
+            *val = resp;
         }
     }
-
-    efree(resp);
 
     return SUCCESS;
 }

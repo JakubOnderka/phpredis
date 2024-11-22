@@ -748,12 +748,12 @@ redis_sock_read_bulk_reply_zstr(RedisSock *redis_sock, int bytes)
 }
 
 PHP_REDIS_API zend_string *
-redis_sock_read_zstr(RedisSock *redis_sock)
+redis_sock_read_zstr_ex(RedisSock *redis_sock, int *buf_len)
 {
     char inbuf[4096];
     size_t len;
 
-    int buf_len = 0;
+    *buf_len = 0;
     if (redis_sock_gets(redis_sock, inbuf, sizeof(inbuf) - 1, &len) < 0) {
         return NULL;
     }
@@ -767,8 +767,8 @@ redis_sock_read_zstr(RedisSock *redis_sock)
 
             return NULL;
         case '$':
-            buf_len = atoi(inbuf + 1);
-            return redis_sock_read_bulk_reply_zstr(redis_sock, buf_len);
+            *buf_len = atoi(inbuf + 1);
+            return redis_sock_read_bulk_reply_zstr(redis_sock, *buf_len);
 
         case '*':
             /* For null multi-bulk replies (like timeouts from brpoplpush): */
@@ -781,6 +781,7 @@ redis_sock_read_zstr(RedisSock *redis_sock)
             /* Single Line Reply */
             /* +OK or :123 */
             if (len > 1) {
+                *buf_len = len;
                 return zend_string_init(inbuf, len, 0);
             }
             REDIS_FALLTHROUGH;
@@ -792,6 +793,13 @@ redis_sock_read_zstr(RedisSock *redis_sock)
     }
 
     return NULL;
+}
+
+PHP_REDIS_API zend_always_inline zend_string *
+redis_sock_read_zstr(RedisSock *redis_sock)
+{
+    int buf_len;
+    return redis_sock_read_zstr_ex(redis_sock, &buf_len);
 }
 
 /**
@@ -3552,7 +3560,8 @@ redis_mbulk_reply_loop(RedisSock *redis_sock, zval *z_tab, int count,
 static int
 redis_mbulk_reply_zipped_raw_variant(RedisSock *redis_sock, zval *zret, int count) {
     REDIS_REPLY_TYPE type;
-    char *key, *val;
+    char *key;
+    zend_string *val;
     int keylen, i;
     zend_long lval;
     double dval;
@@ -3570,24 +3579,24 @@ redis_mbulk_reply_zipped_raw_variant(RedisSock *redis_sock, zval *zret, int coun
         }
 
         if (type == TYPE_BULK) {
-            if (vallen > INT_MAX || (val = redis_sock_read_bulk_reply(redis_sock, (int)vallen)) == NULL) {
+            if (vallen > INT_MAX || (val = redis_sock_read_bulk_reply_zstr(redis_sock, (int)vallen)) == NULL) {
                 efree(key);
                 return FAILURE;
             }
 
             /* Possibly overkill, but provides really nice types */
-            switch (is_numeric_string(val, vallen, &lval, &dval, 0)) {
+            switch (is_numeric_string(ZSTR_VAL(val), vallen, &lval, &dval, 0)) {
                 case IS_LONG:
                     add_assoc_long_ex(zret, key, keylen, lval);
+                    zend_string_efree(val);
                     break;
                 case IS_DOUBLE:
                     add_assoc_double_ex(zret, key, keylen, dval);
+                    zend_string_efree(val);
                     break;
                 default:
-                    add_assoc_stringl_ex(zret, key, keylen, val, vallen);
+                    add_assoc_str_ex(zret, key, keylen, val);
             }
-
-            efree(val);
         } else if (type == TYPE_INT) {
             add_assoc_long_ex(zret, key, keylen, (zend_long)vallen);
         } else {
@@ -4303,15 +4312,14 @@ redis_read_variant_bulk(RedisSock *redis_sock, int size, zval *z_ret
                        )
 {
     // Attempt to read the bulk reply
-    char *bulk_resp = redis_sock_read_bulk_reply(redis_sock, size);
+    zend_string *bulk_resp = redis_sock_read_bulk_reply_zstr(redis_sock, size);
 
     /* Set our reply to FALSE on failure, and the string on success */
-    if(bulk_resp == NULL) {
+    if (bulk_resp == NULL) {
         ZVAL_FALSE(z_ret);
         return -1;
     }
-    ZVAL_STRINGL(z_ret, bulk_resp, size);
-    efree(bulk_resp);
+    ZVAL_STR(z_ret, bulk_resp);
     return 0;
 }
 

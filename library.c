@@ -103,6 +103,13 @@ void redis_register_persistent_resource(zend_string *id, void *ptr, int le_id) {
     zend_register_persistent_resource(ZSTR_VAL(id), ZSTR_LEN(id), ptr, le_id);
 }
 
+/* Do not allocate empty string or string with one character */
+static zend_always_inline void redis_add_next_index_stringl(zval *arg, const char *str, size_t length) {
+    zval tmp;
+    ZVAL_STRINGL_FAST(&tmp, str, length);
+    zend_hash_next_index_insert(Z_ARRVAL_P(arg), &tmp);
+}
+
 static ConnectionPool *
 redis_sock_get_connection_pool(RedisSock *redis_sock)
 {
@@ -1680,10 +1687,9 @@ static void array_zip_values_and_scores(RedisSock *redis_sock, zval *z_tab,
 {
 
     zval z_ret, z_sub;
-    HashTable *keytable;
+    HashTable *keytable = Z_ARRVAL_P(z_tab);
 
-    array_init(&z_ret);
-    keytable = Z_ARRVAL_P(z_tab);
+    array_init_size(&z_ret, zend_hash_num_elements(keytable) / 2);
 
     for(zend_hash_internal_pointer_reset(keytable);
         zend_hash_has_more_elements(keytable) == SUCCESS;
@@ -1712,13 +1718,13 @@ static void array_zip_values_and_scores(RedisSock *redis_sock, zval *z_tab,
 
         /* Decode the score depending on flag */
         if (decode == SCORE_DECODE_INT && Z_STRLEN_P(z_value_p) > 0) {
-            add_assoc_long_ex(&z_ret, ZSTR_VAL(hkey), ZSTR_LEN(hkey), atoi(hval+1));
+            ZVAL_LONG(&z_sub, atoi(hval+1));
         } else if (decode == SCORE_DECODE_DOUBLE) {
-            add_assoc_double_ex(&z_ret, ZSTR_VAL(hkey), ZSTR_LEN(hkey), atof(hval));
+            ZVAL_DOUBLE(&z_sub, atof(hval));
         } else {
             ZVAL_ZVAL(&z_sub, z_value_p, 1, 0);
-            add_assoc_zval_ex(&z_ret, ZSTR_VAL(hkey), ZSTR_LEN(hkey), &z_sub);
         }
+        zend_symtable_update(Z_ARRVAL_P(&z_ret), hkey, &z_sub);
         zend_string_release(hkey);
     }
 
@@ -1787,13 +1793,18 @@ redis_mbulk_reply_zipped(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock,
         return FAILURE;
     }
     zval z_multi_result;
-    array_init(&z_multi_result); /* pre-allocate array for multi's results. */
 
-    /* Grab our key, value, key, value array */
-    redis_mbulk_reply_loop(redis_sock, &z_multi_result, numElems, unserialize);
+    if (numElems < 1) {
+        ZVAL_EMPTY_ARRAY(&z_multi_result);
+    } else {
+        array_init_size(&z_multi_result, numElems); /* pre-allocate array for multi's results. */
 
-    /* Zip keys and values */
-    array_zip_values_and_scores(redis_sock, &z_multi_result, decode);
+        /* Grab our key, value, key, value array */
+        redis_mbulk_reply_loop(redis_sock, &z_multi_result, numElems, unserialize);
+
+        /* Zip keys and values */
+        array_zip_values_and_scores(redis_sock, &z_multi_result, decode);
+    }
 
     if (IS_ATOMIC(redis_sock)) {
         RETVAL_ZVAL(&z_multi_result, 0, 1);
@@ -2666,14 +2677,14 @@ PHP_REDIS_API int redis_string_response(INTERNAL_FUNCTION_PARAMETERS, RedisSock 
     }
     if (IS_ATOMIC(redis_sock)) {
         if (!redis_unpack(redis_sock, response, response_len, return_value)) {
-            RETVAL_STRINGL(response, response_len);
+            RETVAL_STRINGL_FAST(response, response_len);
         }
     } else {
         zval z_unpacked;
         if (redis_unpack(redis_sock, response, response_len, &z_unpacked)) {
             add_next_index_zval(z_tab, &z_unpacked);
         } else {
-            add_next_index_stringl(z_tab, response, response_len);
+            redis_add_next_index_stringl(z_tab, response, response_len);
         }
     }
 
@@ -3350,8 +3361,10 @@ PHP_REDIS_API int redis_sock_read_multibulk_reply(INTERNAL_FUNCTION_PARAMETERS,
     }
     if (numElems == -1 && redis_sock->null_mbulk_as_null) {
         ZVAL_NULL(&z_multi_result);
+    } else if (numElems < 1) {
+        ZVAL_EMPTY_ARRAY(&z_multi_result);
     } else {
-        array_init(&z_multi_result);
+        array_init_size(&z_multi_result, numElems);
         redis_mbulk_reply_loop(redis_sock, &z_multi_result, numElems, UNSERIALIZE_ALL);
     }
 
@@ -3380,9 +3393,13 @@ redis_mbulk_reply_raw(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock, zval 
         return FAILURE;
     }
     zval z_multi_result;
-    array_init(&z_multi_result); /* pre-allocate array for multi's results. */
 
-    redis_mbulk_reply_loop(redis_sock, &z_multi_result, numElems, UNSERIALIZE_NONE);
+    if (numElems < 1) {
+        ZVAL_EMPTY_ARRAY(&z_multi_result);
+    } else {
+        array_init_size(&z_multi_result, numElems); /* pre-allocate array for multi's results. */
+        redis_mbulk_reply_loop(redis_sock, &z_multi_result, numElems, UNSERIALIZE_NONE);
+    }
 
     if (IS_ATOMIC(redis_sock)) {
         RETVAL_ZVAL(&z_multi_result, 0, 1);
@@ -3409,14 +3426,18 @@ redis_mbulk_reply_double(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock, zv
         return FAILURE;
     }
 
-    array_init(&z_multi_result);
-    for (i = 0; i < numElems; ++i) {
-        if ((line = redis_sock_read(redis_sock, &len)) == NULL) {
-            add_next_index_bool(&z_multi_result, 0);
-            continue;
+    if (numElems < 1) {
+        ZVAL_EMPTY_ARRAY(&z_multi_result);
+    } else {
+        array_init_size(&z_multi_result, numElems);
+        for (i = 0; i < numElems; ++i) {
+            if ((line = redis_sock_read(redis_sock, &len)) == NULL) {
+                add_next_index_bool(&z_multi_result, 0);
+                continue;
+            }
+            add_next_index_double(&z_multi_result, atof(line));
+            efree(line);
         }
-        add_next_index_double(&z_multi_result, atof(line));
-        efree(line);
     }
 
     if (IS_ATOMIC(redis_sock)) {
@@ -3454,7 +3475,7 @@ redis_mbulk_reply_loop(RedisSock *redis_sock, zval *z_tab, int count,
         if (unwrap && redis_unpack(redis_sock, line, len, &z_unpacked)) {
             add_next_index_zval(z_tab, &z_unpacked);
         } else {
-            add_next_index_stringl(z_tab, line, len);
+            redis_add_next_index_stringl(z_tab, line, len);
         }
         efree(line);
     }
@@ -3878,7 +3899,7 @@ redis_unpack(RedisSock *redis_sock, const char *src, int srclen, zval *zdst) {
     /* Uncompress, then unserialize */
     if (redis_uncompress(redis_sock, &buf, &len, src, srclen)) {
         if (!redis_unserialize(redis_sock, buf, len, zdst)) {
-            ZVAL_STRINGL(zdst, buf, len);
+            ZVAL_STRINGL_FAST(zdst, buf, len);
         }
         efree(buf);
         return 1;

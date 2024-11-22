@@ -166,18 +166,18 @@ zend_object_handlers redis_object_handlers;
 static int
 redis_send_discard(RedisSock *redis_sock)
 {
-    char *resp;
+    zend_string *resp;
     int resp_len, result = FAILURE;
 
     /* send our DISCARD command */
     if (redis_sock_write(redis_sock, ZEND_STRL(RESP_DISCARD_CMD)) >= 0 &&
-       (resp = redis_sock_read(redis_sock,&resp_len)) != NULL)
+       (resp = redis_sock_read_zstr(redis_sock)) != NULL)
     {
         /* success if we get OK */
-        result = (resp_len == 3 && redis_strncmp(resp, ZEND_STRL("+OK")) == 0) ? SUCCESS:FAILURE;
+        result = redis_str_stars_with(resp, ZEND_STRL("+OK")) ? SUCCESS : FAILURE;
 
         /* free our response */
-        efree(resp);
+        zend_string_free(resp);
     }
 
     /* return success/failure */
@@ -368,6 +368,8 @@ PHP_MINIT_FUNCTION(redis)
     php_session_register_module(&ps_mod_redis);
     php_session_register_module(&ps_mod_redis_cluster);
 #endif
+
+    redis_init_interned_strings();
 
     /* Register resource destructors */
     le_redis_pconnect = zend_register_list_destructors_ex(NULL, redis_connections_pool_dtor,
@@ -718,8 +720,7 @@ PHP_METHOD(Redis, renameNx)
  */
 PHP_METHOD(Redis, reset)
 {
-    char *response;
-    int response_len;
+    zend_string *response;
     RedisSock *redis_sock;
     smart_string cmd = {0};
     zend_bool ret = 0;
@@ -737,9 +738,9 @@ PHP_METHOD(Redis, reset)
 
     REDIS_PROCESS_REQUEST(redis_sock, cmd.c, cmd.len);
 
-    if ((response = redis_sock_read(redis_sock, &response_len)) != NULL) {
-        ret = REDIS_STRCMP_STATIC(response, response_len, "+RESET");
-        efree(response);
+    if ((response = redis_sock_read_zstr(redis_sock)) != NULL) {
+        ret = redis_str_stars_with(response, ZEND_STRL("+RESET"));
+        zend_string_free(response);
     }
 
     if (!ret) {
@@ -1872,7 +1873,7 @@ PHP_METHOD(Redis, multi)
 {
 
     RedisSock *redis_sock;
-    char *resp;
+    zend_string *resp;
     int resp_len;
     zval *object;
     zend_long multi_value = MULTI;
@@ -1912,13 +1913,13 @@ PHP_METHOD(Redis, multi)
                 if (redis_sock_write(redis_sock, ZEND_STRL(RESP_MULTI_CMD)) < 0) {
                     RETURN_FALSE;
                 }
-                if ((resp = redis_sock_read(redis_sock, &resp_len)) == NULL) {
+                if ((resp = redis_sock_read_zstr(redis_sock)) == NULL) {
                     RETURN_FALSE;
-                } else if (redis_strncmp(resp, ZEND_STRL("+OK")) != 0) {
-                    efree(resp);
+                } else if (!redis_str_stars_with(resp, ZEND_STRL("+OK"))) {
+                    zend_string_free(resp);
                     RETURN_FALSE;
                 }
-                efree(resp);
+                zend_string_free(resp);
                 REDIS_ENABLE_MODE(redis_sock, MULTI);
             }
         }
@@ -2049,14 +2050,14 @@ PHP_METHOD(Redis, exec)
 PHP_REDIS_API int
 redis_response_enqueued(RedisSock *redis_sock)
 {
-    char *resp;
-    int resp_len, ret = FAILURE;
+    zend_string *resp;
+    int ret = FAILURE;
 
-    if ((resp = redis_sock_read(redis_sock, &resp_len)) != NULL) {
-        if (redis_strncmp(resp, ZEND_STRL("+QUEUED")) == 0) {
+    if ((resp = redis_sock_read_zstr(redis_sock)) != NULL) {
+        if (redis_str_stars_with(resp, ZEND_STRL("+QUEUED"))) {
             ret = SUCCESS;
         }
-        efree(resp);
+        zend_string_free(resp);
     }
     return ret;
 }

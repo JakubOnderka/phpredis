@@ -2024,7 +2024,7 @@ PHP_METHOD(Redis, exec)
     if (IS_PIPELINE(redis_sock)) {
         if (redis_sock->pipeline_cmd == NULL) {
             /* Empty array when no command was run. */
-            array_init(&z_ret);
+            ZVAL_EMPTY_ARRAY(&z_ret);
         } else {
             if (redis_sock_write(redis_sock, ZSTR_VAL(redis_sock->pipeline_cmd),
                     ZSTR_LEN(redis_sock->pipeline_cmd)) < 0) {

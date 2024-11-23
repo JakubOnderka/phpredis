@@ -1974,8 +1974,6 @@ redis_sock_read_multibulk_multi_reply(INTERNAL_FUNCTION_PARAMETERS,
         return FAILURE;
     }
 
-    array_init(z_tab);
-
     return redis_sock_read_multibulk_multi_reply_loop(INTERNAL_FUNCTION_PARAM_PASSTHRU,
                     redis_sock, z_tab);
 }
@@ -2027,7 +2025,6 @@ PHP_METHOD(Redis, exec)
                     ZSTR_LEN(redis_sock->pipeline_cmd.s)) < 0) {
                 ZVAL_FALSE(&z_ret);
             } else {
-                array_init(&z_ret);
                 if (redis_sock_read_multibulk_multi_reply_loop(
                     INTERNAL_FUNCTION_PARAM_PASSTHRU, redis_sock, &z_ret) != SUCCESS) {
                     zval_dtor(&z_ret);
@@ -2062,6 +2059,15 @@ redis_sock_read_multibulk_multi_reply_loop(INTERNAL_FUNCTION_PARAMETERS,
                                            RedisSock *redis_sock, zval *z_tab)
 {
     fold_item *fi;
+    int count = 0;
+
+    /* Count issued commands so we can preallocate array for results */
+    for (fi = redis_sock->head; fi; /* void */) {
+        count++;
+        if (fi) fi = fi->next;
+    }
+
+    array_init_size(z_tab, count);
 
     for (fi = redis_sock->head; fi; /* void */) {
         if (fi->fun) {

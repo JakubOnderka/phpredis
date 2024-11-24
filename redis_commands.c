@@ -2649,6 +2649,8 @@ int redis_hincrbyfloat_cmd(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock,
 int redis_hmget_cmd(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock,
                     char **cmd, int *cmd_len, short *slot, void **ctx)
 {
+    printf("redis_hmget_cmd\n");
+
     zval *field = NULL;
     zend_string **zctx = NULL;
     smart_string cmdstr = {0};
@@ -2690,6 +2692,8 @@ int redis_hmget_cmd(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock,
     for (i = 0; i < valid; i++) {
         redis_cmd_append_sstr_zstr(&cmdstr, zctx[i]);
     }
+
+    printf("redis_hmget_cmd command: %s\n", cmdstr.c);
 
     // Push out command, length, and key context
     *cmd     = cmdstr.c;

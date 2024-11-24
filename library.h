@@ -210,6 +210,11 @@ PHP_REDIS_API int redis_select_response(INTERNAL_FUNCTION_PARAMETERS, RedisSock 
 
 /* Helper methods to get configuration values from a HashTable. */
 
+/** Initialize packed hash table (array) with given size */
+#define REDIS_HASH_INIT_PACKED(zval, size) \
+    array_init_size(zval, size); \
+    zend_hash_real_init_packed(Z_ARRVAL_P(zval)); \
+
 #define REDIS_HASH_STR_FIND_STATIC(ht, sstr) \
     zend_hash_str_find(ht, sstr, sizeof(sstr) - 1)
 #define REDIS_HASH_STR_FIND_TYPE_STATIC(ht, sstr, type) \

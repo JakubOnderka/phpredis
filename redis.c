@@ -2077,7 +2077,7 @@ redis_sock_read_multibulk_multi_reply_loop(INTERNAL_FUNCTION_PARAMETERS,
         if (fi) fi = fi->next;
     }
 
-    array_init_size(z_tab, count);
+    REDIS_HASH_INIT_PACKED(z_tab, count);
 
     for (fi = redis_sock->head; fi; /* void */) {
         if (fi->fun) {
@@ -2583,7 +2583,7 @@ PHP_METHOD(Redis, getTransferredBytes) {
         RETURN_THROWS();
     }
 
-    array_init_size(return_value, 2);
+    REDIS_HASH_INIT_PACKED(return_value, 2);
     add_next_index_long(return_value, redis_sock->txBytes);
     add_next_index_long(return_value, redis_sock->rxBytes);
 }
@@ -2647,7 +2647,7 @@ PHP_METHOD(Redis, getAuth) {
         RETURN_FALSE;
 
     if (redis_sock->user && redis_sock->pass) {
-        array_init(&zret);
+        REDIS_HASH_INIT_PACKED(&zret, 2);
         add_next_index_str(&zret, zend_string_copy(redis_sock->user));
         add_next_index_str(&zret, zend_string_copy(redis_sock->pass));
         RETURN_ZVAL(&zret, 0, 0);

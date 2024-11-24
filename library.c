@@ -3534,6 +3534,8 @@ PHP_REDIS_API int redis_mbulk_reply_assoc(INTERNAL_FUNCTION_PARAMETERS, RedisSoc
 
     array_init_size(&z_multi_result, numElems); /* pre-allocate array for multi's results. */
 
+    printf("redis_mbulk_reply_assoc\n");
+
     for(i = 0; i < numElems; ++i) {
         response = redis_sock_read(redis_sock, &response_len);
         zval z_value;
@@ -3553,6 +3555,7 @@ PHP_REDIS_API int redis_mbulk_reply_assoc(INTERNAL_FUNCTION_PARAMETERS, RedisSoc
     }
 
     // Cleanup z_keys
+    printf("redis_mbulk_reply_assoc Cleanup z_keys\n");
     for (i = 0; z_keys[i] != NULL; ++i) {
         zend_string_release(z_keys[i]);
     }

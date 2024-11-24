@@ -2693,7 +2693,7 @@ int redis_hmget_cmd(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock,
         redis_cmd_append_sstr_zstr(&cmdstr, zctx[i]);
     }
 
-    printf("redis_hmget_cmd command: %s\n", cmdstr.c);
+    printf("redis_hmget_cmd command: %.*s\n", (int)cmdstr.len, cmdstr.c);
 
     // Push out command, length, and key context
     *cmd     = cmdstr.c;

@@ -2649,7 +2649,8 @@ int redis_hincrbyfloat_cmd(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock,
 int redis_hmget_cmd(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock,
                     char **cmd, int *cmd_len, short *slot, void **ctx)
 {
-    zval *field = NULL, *zctx = NULL;
+    zval *field = NULL;
+    zend_string **zctx = NULL;
     smart_string cmdstr = {0};
     HashTable *fields = NULL;
     zend_string *key = NULL;
@@ -2667,10 +2668,13 @@ int redis_hmget_cmd(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock,
 
     ZEND_HASH_FOREACH_VAL(fields, field) {
         ZVAL_DEREF(field);
-        if (!((Z_TYPE_P(field) == IS_STRING && Z_STRLEN_P(field) > 0) || Z_TYPE_P(field) == IS_LONG))
-            continue;
 
-        ZVAL_COPY(&zctx[valid++], field);
+        // Only non-empty strings and integers are supported, other fields are skipped
+        if (Z_TYPE_P(field) == IS_STRING && Z_STRLEN_P(field) > 0) {
+            zctx[valid++] = zend_string_copy(Z_STR_P(field));
+        } else if (Z_TYPE_P(field) == IS_LONG) {
+            zctx[valid++] = zend_long_to_str(Z_LVAL_P(field));
+        }
     } ZEND_HASH_FOREACH_END();
 
     if (valid == 0) {
@@ -2678,13 +2682,13 @@ int redis_hmget_cmd(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock,
         return FAILURE;
     }
 
-    ZVAL_NULL(&zctx[valid]);
+    zctx[valid] = NULL;
 
     REDIS_CMD_INIT_SSTR_STATIC(&cmdstr, 1 + valid, "HMGET");
     redis_cmd_append_sstr_key_zstr(&cmdstr, key, redis_sock, slot);
 
     for (i = 0; i < valid; i++) {
-        redis_cmd_append_sstr_zval(&cmdstr, &zctx[i], NULL);
+        redis_cmd_append_sstr_zstr(&cmdstr, zctx[i]);
     }
 
     // Push out command, length, and key context

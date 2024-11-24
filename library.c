@@ -3519,7 +3519,7 @@ PHP_REDIS_API int redis_mbulk_reply_assoc(INTERNAL_FUNCTION_PARAMETERS, RedisSoc
     int response_len;
     int i, numElems;
 
-    zval *z_keys = ctx;
+    zend_string **z_keys = ctx;
 
     if (read_mbulk_header(redis_sock, &numElems) < 0) {
         if (IS_ATOMIC(redis_sock)) {
@@ -3527,12 +3527,7 @@ PHP_REDIS_API int redis_mbulk_reply_assoc(INTERNAL_FUNCTION_PARAMETERS, RedisSoc
         } else {
             add_next_index_bool(z_tab, 0);
         }
-        // Cleanup z_keys
-        for (i = 0; Z_TYPE(z_keys[i]) != IS_NULL; ++i) {
-            zval_dtor(&z_keys[i]);
-        }
-        efree(z_keys);
-        return FAILURE;
+        goto failure;
     }
 
     zval z_multi_result;
@@ -3540,25 +3535,26 @@ PHP_REDIS_API int redis_mbulk_reply_assoc(INTERNAL_FUNCTION_PARAMETERS, RedisSoc
     array_init_size(&z_multi_result, numElems); /* pre-allocate array for multi's results. */
 
     for(i = 0; i < numElems; ++i) {
-        zend_string *tmp_str;
-        zend_string *zstr = zval_get_tmp_string(&z_keys[i], &tmp_str);
         response = redis_sock_read(redis_sock, &response_len);
-        zval z_unpacked;
+        zval z_value;
         if (response != NULL) {
-            if (!redis_unpack(redis_sock, response, response_len, &z_unpacked)) {
-                ZVAL_STRINGL(&z_unpacked, response, response_len);
+            if (!redis_unpack(redis_sock, response, response_len, &z_value)) {
+                ZVAL_STRINGL(&z_value, response, response_len);
             }
             efree(response);
         } else {
-            ZVAL_FALSE(&z_unpacked);
+            ZVAL_FALSE(&z_value);
         }
-        zend_symtable_update(Z_ARRVAL(z_multi_result), zstr, &z_unpacked);
-        zend_tmp_string_release(tmp_str);
+        // In case Redis returns more elements that was requested
+        if (UNEXPECTED(z_keys[i] == NULL)) {
+            goto failure;
+        }
+        zend_symtable_update(Z_ARRVAL(z_multi_result), z_keys[i], &z_value);
     }
 
     // Cleanup z_keys
-    for (i = 0; Z_TYPE(z_keys[i]) != IS_NULL; ++i) {
-        zval_dtor(&z_keys[i]);
+    for (i = 0; z_keys[i] != NULL; ++i) {
+        zend_string_release(z_keys[i]);
     }
     efree(z_keys);
 
@@ -3568,6 +3564,13 @@ PHP_REDIS_API int redis_mbulk_reply_assoc(INTERNAL_FUNCTION_PARAMETERS, RedisSoc
         add_next_index_zval(z_tab, &z_multi_result);
     }
     return SUCCESS;
+failure:
+    // Cleanup z_keys
+    for (i = 0; z_keys[i] != NULL; ++i) {
+        zend_string_release(z_keys[i]);
+    }
+    efree(z_keys);
+    return FAILURE;
 }
 
 /**

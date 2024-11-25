@@ -1948,10 +1948,7 @@ PHP_METHOD(Redis, discard)
 
     if (IS_PIPELINE(redis_sock)) {
         ret = SUCCESS;
-        if (redis_sock->pipeline_cmd) {
-            zend_string_release(redis_sock->pipeline_cmd);
-            redis_sock->pipeline_cmd = NULL;
-        }
+        smart_str_free(&redis_sock->pipeline_cmd);
     } else if (IS_MULTI(redis_sock)) {
         ret = redis_send_discard(redis_sock);
     }
@@ -2026,12 +2023,12 @@ PHP_METHOD(Redis, exec)
     }
 
     if (IS_PIPELINE(redis_sock)) {
-        if (redis_sock->pipeline_cmd == NULL) {
+        if (smart_str_get_len(&redis_sock->pipeline_cmd) == 0) {
             /* Empty array when no command was run. */
             ZVAL_EMPTY_ARRAY(&z_ret);
         } else {
-            if (redis_sock_write(redis_sock, ZSTR_VAL(redis_sock->pipeline_cmd),
-                    ZSTR_LEN(redis_sock->pipeline_cmd)) < 0) {
+            if (redis_sock_write(redis_sock, ZSTR_VAL(redis_sock->pipeline_cmd.s),
+                    ZSTR_LEN(redis_sock->pipeline_cmd.s)) < 0) {
                 ZVAL_FALSE(&z_ret);
             } else {
                 if (redis_sock_read_multibulk_multi_reply_loop(
@@ -2040,8 +2037,7 @@ PHP_METHOD(Redis, exec)
                     ZVAL_FALSE(&z_ret);
                 }
             }
-            zend_string_release(redis_sock->pipeline_cmd);
-            redis_sock->pipeline_cmd = NULL;
+            smart_str_free(&redis_sock->pipeline_cmd);
         }
         free_reply_callbacks(redis_sock);
         REDIS_DISABLE_MODE(redis_sock, PIPELINE);

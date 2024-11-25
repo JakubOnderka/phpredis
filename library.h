@@ -29,6 +29,9 @@
     /* use RedisException when ValueError not available */
     #define REDIS_VALUE_EXCEPTION(m) REDIS_THROW_EXCEPTION(m, 0)
     #define RETURN_THROWS() RETURN_FALSE
+    /* ZVAL_STRINGL_FAST and RETVAL_STRINGL_FAST macros are supported since PHP 8 */
+    #define ZVAL_STRINGL_FAST(z, s, l) ZVAL_STRINGL(z, s, l)
+    #define RETVAL_STRINGL_FAST(s, l) RETVAL_STRINGL(s, l)
 #else
     #define redis_hash_fetch_ops(zstr) php_hash_fetch_ops(zstr)
 
@@ -206,6 +209,11 @@ PHP_REDIS_API int redis_command_response(INTERNAL_FUNCTION_PARAMETERS, RedisSock
 PHP_REDIS_API int redis_select_response(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock, zval *z_tab, void *ctx);
 
 /* Helper methods to get configuration values from a HashTable. */
+
+/** Initialize packed hash table (array) with given size */
+#define REDIS_HASH_INIT_PACKED(zval, size) \
+    array_init_size(zval, size); \
+    zend_hash_real_init_packed(Z_ARRVAL_P(zval)); \
 
 #define REDIS_HASH_STR_FIND_STATIC(ht, sstr) \
     zend_hash_str_find(ht, sstr, sizeof(sstr) - 1)

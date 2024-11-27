@@ -1948,10 +1948,7 @@ PHP_METHOD(Redis, discard)
 
     if (IS_PIPELINE(redis_sock)) {
         ret = SUCCESS;
-        if (redis_sock->pipeline_cmd) {
-            zend_string_release(redis_sock->pipeline_cmd);
-            redis_sock->pipeline_cmd = NULL;
-        }
+        smart_str_free(&redis_sock->pipeline_cmd);
     } else if (IS_MULTI(redis_sock)) {
         ret = redis_send_discard(redis_sock);
     }
@@ -1975,6 +1972,12 @@ redis_sock_read_multibulk_multi_reply(INTERNAL_FUNCTION_PARAMETERS,
         *inbuf != TYPE_MULTIBULK || atoi(inbuf + 1) < 0
     ) {
         return FAILURE;
+    }
+
+    // No command issued, return empty immutable array
+    if (redis_sock->head == NULL) {
+        ZVAL_EMPTY_ARRAY(z_tab);
+        return SUCCESS;
     }
 
     array_init(z_tab);
@@ -2022,12 +2025,12 @@ PHP_METHOD(Redis, exec)
     }
 
     if (IS_PIPELINE(redis_sock)) {
-        if (redis_sock->pipeline_cmd == NULL) {
+        if (smart_str_get_len(&redis_sock->pipeline_cmd) == 0) {
             /* Empty array when no command was run. */
-            array_init(&z_ret);
+            ZVAL_EMPTY_ARRAY(&z_ret);
         } else {
-            if (redis_sock_write(redis_sock, ZSTR_VAL(redis_sock->pipeline_cmd),
-                    ZSTR_LEN(redis_sock->pipeline_cmd)) < 0) {
+            if (redis_sock_write(redis_sock, ZSTR_VAL(redis_sock->pipeline_cmd.s),
+                    ZSTR_LEN(redis_sock->pipeline_cmd.s)) < 0) {
                 ZVAL_FALSE(&z_ret);
             } else {
                 array_init(&z_ret);
@@ -2037,8 +2040,7 @@ PHP_METHOD(Redis, exec)
                     ZVAL_FALSE(&z_ret);
                 }
             }
-            zend_string_release(redis_sock->pipeline_cmd);
-            redis_sock->pipeline_cmd = NULL;
+            smart_str_free(&redis_sock->pipeline_cmd);
         }
         free_reply_callbacks(redis_sock);
         REDIS_DISABLE_MODE(redis_sock, PIPELINE);
@@ -2066,10 +2068,17 @@ redis_sock_read_multibulk_multi_reply_loop(INTERNAL_FUNCTION_PARAMETERS,
                                            RedisSock *redis_sock, zval *z_tab)
 {
     fold_item *fi;
+    zval* original_return_value = return_value;
+    zval function_return_value;
 
     for (fi = redis_sock->head; fi; /* void */) {
         if (fi->fun) {
-            fi->fun(INTERNAL_FUNCTION_PARAM_PASSTHRU, redis_sock, z_tab, fi->ctx);
+            // fun method will return response value in `return_value` zval, but we need to add this value to z_tab
+            // and keep sure that we will not modify original return_value variable
+            return_value = &function_return_value;
+            fi->fun(INTERNAL_FUNCTION_PARAM_PASSTHRU, redis_sock, NULL, fi->ctx);
+            zend_hash_next_index_insert_new(Z_ARRVAL_P(z_tab), return_value);
+            return_value = original_return_value;
             fi = fi->next;
             continue;
         }

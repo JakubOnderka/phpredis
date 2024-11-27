@@ -2070,42 +2070,10 @@ redis_sock_read_multibulk_multi_reply_loop(INTERNAL_FUNCTION_PARAMETERS,
     fold_item *fi;
 
     for (fi = redis_sock->head; fi; /* void */) {
-        if (fi->fun) {
-            fi->fun(INTERNAL_FUNCTION_PARAM_PASSTHRU, redis_sock, z_tab, fi->ctx);
-            fi = fi->next;
-            continue;
-        }
-        size_t len;
-        char inbuf[255];
-
-        if (redis_sock_gets(redis_sock, inbuf, sizeof(inbuf) - 1, &len) < 0 ||
-            redis_strncmp(inbuf, ZEND_STRL("+OK")) != 0)
-        {
-            return FAILURE;
-        }
-
-        while ((fi = fi->next) && fi->fun) {
-            if (redis_response_enqueued(redis_sock) != SUCCESS) {
-                return FAILURE;
-            }
-        }
-
-        if (redis_sock_gets(redis_sock, inbuf, sizeof(inbuf) - 1, &len) < 0) {
-            return FAILURE;
-        }
-
-        zval z_ret;
-        array_init(&z_ret);
-        add_next_index_zval(z_tab, &z_ret);
-
-        int num = atol(inbuf + 1);
-
-        if (num > 0 && redis_read_multibulk_recursive(redis_sock, num, 0, &z_ret) < 0) {
-            return FAILURE;
-        }
-
-        if (fi) fi = fi->next;
+        fi->fun(INTERNAL_FUNCTION_PARAM_PASSTHRU, redis_sock, z_tab, fi->ctx);
+        fi = fi->next;
     }
+
     redis_sock->current = fi;
     return SUCCESS;
 }

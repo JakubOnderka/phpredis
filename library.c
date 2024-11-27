@@ -4288,9 +4288,11 @@ redis_read_multibulk_recursive(RedisSock *redis_sock, long long elements, int st
                 if (reply_info < 0 && redis_sock->null_mbulk_as_null) {
                     add_next_index_null(z_ret);
                 } else {
-                    array_init(&z_subelem);
                     if (reply_info > 0) {
+                        array_init_size(&z_subelem, reply_info);
                         redis_read_multibulk_recursive(redis_sock, reply_info, status_strings, &z_subelem);
+                    } else {
+                        array_init(&z_subelem);
                     }
                     add_next_index_zval(z_ret, &z_subelem);
                 }

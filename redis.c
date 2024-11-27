@@ -2068,10 +2068,17 @@ redis_sock_read_multibulk_multi_reply_loop(INTERNAL_FUNCTION_PARAMETERS,
                                            RedisSock *redis_sock, zval *z_tab)
 {
     fold_item *fi;
+    zval* original_return_value = return_value;
+    zval function_return_value;
 
     for (fi = redis_sock->head; fi; /* void */) {
         if (fi->fun) {
-            fi->fun(INTERNAL_FUNCTION_PARAM_PASSTHRU, redis_sock, z_tab, fi->ctx);
+            // fun method will return response value in `return_value` zval, but we need to add this value to z_tab
+            // and keep sure that we will not modify original return_value variable
+            return_value = &function_return_value;
+            fi->fun(INTERNAL_FUNCTION_PARAM_PASSTHRU, redis_sock, NULL, fi->ctx);
+            zend_hash_next_index_insert_new(Z_ARRVAL_P(z_tab), return_value);
+            return_value = original_return_value;
             fi = fi->next;
             continue;
         }

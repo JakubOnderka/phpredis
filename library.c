@@ -2054,9 +2054,13 @@ redis_function_reply(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock, zval *
         return FAILURE;
     }
 
-    array_init(&z_ret);
-    redis_read_multibulk_recursive(redis_sock, numElems, 0, &z_ret);
-    array_zip_values_recursive(&z_ret);
+    if (numElems < 1) {
+        ZVAL_EMPTY_ARRAY(&z_ret);
+    } else {
+        array_init_size(&z_ret, numElems);
+        redis_read_multibulk_recursive(redis_sock, numElems, 0, &z_ret);
+        array_zip_values_recursive(&z_ret);
+    }
 
     if (IS_ATOMIC(redis_sock)) {
         RETVAL_ZVAL(&z_ret, 0, 1);

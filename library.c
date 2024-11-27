@@ -4337,15 +4337,13 @@ variant_reply_generic(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock,
             redis_read_variant_bulk(redis_sock, reply_info, &z_ret);
             break;
         case TYPE_MULTIBULK:
-            if (reply_info > -1) {
-                array_init(&z_ret);
-                redis_read_multibulk_recursive(redis_sock, reply_info, status_strings, &z_ret);
+            if (reply_info < 0 && null_mbulk_as_null) {
+                ZVAL_NULL(&z_ret);
+            } else if (reply_info < 1) {
+                ZVAL_EMPTY_ARRAY(&z_ret);
             } else {
-                if (null_mbulk_as_null) {
-                    ZVAL_NULL(&z_ret);
-                } else {
-                    array_init(&z_ret);
-                }
+                array_init_size(&z_ret, reply_info);
+                redis_read_multibulk_recursive(redis_sock, reply_info, status_strings, &z_ret);
             }
             break;
         default:

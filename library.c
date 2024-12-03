@@ -103,13 +103,6 @@ void redis_register_persistent_resource(zend_string *id, void *ptr, int le_id) {
     zend_register_persistent_resource(ZSTR_VAL(id), ZSTR_LEN(id), ptr, le_id);
 }
 
-/* Do not allocate empty string or string with one character */
-static zend_always_inline void redis_add_next_index_stringl(zval *arg, const char *str, size_t length) {
-    zval tmp;
-    ZVAL_STRINGL_FAST(&tmp, str, length);
-    zend_hash_next_index_insert(Z_ARRVAL_P(arg), &tmp);
-}
-
 static ConnectionPool *
 redis_sock_get_connection_pool(RedisSock *redis_sock)
 {
@@ -711,6 +704,111 @@ redis_sock_read_multibulk_reply_zval(RedisSock *redis_sock, zval *z_tab)
     redis_mbulk_reply_loop(redis_sock, z_tab, numElems, UNSERIALIZE_ALL);
 
     return z_tab;
+}
+
+static int
+redis_sock_read_bulk_reply_zstr(RedisSock *redis_sock, int bytes, zend_string **line)
+{
+    int offset = 0, nbytes;
+    ssize_t got;
+
+    if (-1 == bytes || -1 == redis_check_eof(redis_sock, 1, 0)) {
+        return 0;
+    }
+
+    /* + 2 for \r\n */
+    nbytes = bytes + 2;
+
+    /* Allocate zend_string for output line */
+    *line = zend_string_alloc(nbytes, 0);
+
+    /* Consume bulk string */
+    while (offset < nbytes) {
+        got = redis_sock_read_raw(redis_sock, ZSTR_VAL(*line) + offset, nbytes - offset);
+        if (got < 0 || (got == 0 && php_stream_eof(redis_sock->stream)))
+            break;
+
+        offset += got;
+    }
+
+    /* Protect against reading too few bytes */
+    if (offset < nbytes) {
+        /* Error or EOF */
+        REDIS_THROW_EXCEPTION("socket error on read socket", 0);
+        zend_string_efree(*line);
+        return 0;
+    }
+
+    /* Null terminate reply string without \r\n */
+    ZSTR_VAL(*line)[bytes] = '\0';
+    ZSTR_LEN(*line) = bytes;
+
+    return 1;
+}
+
+/**
+ Reads one reply from redis_sock to line as zend_string
+ Returns 1 in case of success, 0 in case of failure and -1 in case of null bulk string (null value)
+**/
+PHP_REDIS_API int
+redis_sock_read_zstr(RedisSock *redis_sock, zend_string **line)
+{
+    char inbuf[4096];
+    size_t len;
+
+    if (redis_sock_gets(redis_sock, inbuf, sizeof(inbuf) - 1, &len) < 0) {
+        return 0;
+    }
+
+    switch(inbuf[0]) {
+        case '-':
+            redis_sock_set_err(redis_sock, inbuf+1, len);
+
+            /* Filter our ERROR through the few that should actually throw */
+            redis_error_throw(redis_sock);
+
+            return 0;
+        case '$':
+            if (memcmp(inbuf + 1, "-1", 2) == 0) { // empty bulk string
+                return -1;
+            }
+
+            len = atoi(inbuf + 1);
+            if (len == 0) {
+                // Response is string with zero chars, skip \r\n and return empty zend_string
+                php_stream_seek(redis_sock->stream, 2, SEEK_CUR);
+                *line = ZSTR_EMPTY_ALLOC();
+                return 1;
+            } else if (len == 1) {
+                // Response is single char string, get char and skip \r\n
+                redis_sock_read_raw(redis_sock, inbuf, 3);
+                *line = ZSTR_CHAR((zend_uchar) inbuf[0]);
+                return 1;
+            }
+            return redis_sock_read_bulk_reply_zstr(redis_sock, len, line);
+        case '*':
+            /* For null multi-bulk replies (like timeouts from brpoplpush): */
+            if (memcmp(inbuf + 1, "-1", 2) == 0) {
+                return -1;
+            }
+            REDIS_FALLTHROUGH;
+        case '+':
+        case ':':
+            /* Single Line Reply */
+            /* +OK or :123 */
+            if (EXPECTED(len > 1)) {
+                *line = zend_string_init(inbuf, len, 0);
+                return 1;
+            }
+            REDIS_FALLTHROUGH;
+        default:
+            zend_throw_exception_ex(redis_exception_ce, 0,
+                "protocol error, got '%c' as reply type byte\n",
+                inbuf[0]
+            );
+    }
+
+    return 0;
 }
 
 /**
@@ -2659,12 +2757,9 @@ redis_1_response(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock, zval *z_ta
 
 PHP_REDIS_API int redis_string_response(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock, zval *z_tab, void *ctx) {
 
-    char *response;
-    int response_len;
+    zend_string *response;
 
-    if ((response = redis_sock_read(redis_sock, &response_len))
-                                    == NULL)
-    {
+    if (redis_sock_read_zstr(redis_sock, &response) <= 0) {
         if (IS_ATOMIC(redis_sock)) {
             RETVAL_FALSE;
         } else {
@@ -2673,19 +2768,13 @@ PHP_REDIS_API int redis_string_response(INTERNAL_FUNCTION_PARAMETERS, RedisSock 
         return FAILURE;
     }
     if (IS_ATOMIC(redis_sock)) {
-        if (!redis_unpack(redis_sock, response, response_len, return_value)) {
-            RETVAL_STRINGL_FAST(response, response_len);
-        }
+        redis_unpack_zstr(redis_sock, response, return_value);
     } else {
         zval z_unpacked;
-        if (redis_unpack(redis_sock, response, response_len, &z_unpacked)) {
-            add_next_index_zval(z_tab, &z_unpacked);
-        } else {
-            redis_add_next_index_stringl(z_tab, response, response_len);
-        }
+        redis_unpack_zstr(redis_sock, response, &z_unpacked);
+        add_next_index_zval(z_tab, &z_unpacked);
     }
 
-    efree(response);
     return SUCCESS;
 }
 
@@ -3389,12 +3478,12 @@ PHP_REDIS_API void
 redis_mbulk_reply_loop(RedisSock *redis_sock, zval *z_tab, int count,
                        int unserialize)
 {
-    zval z_unpacked;
-    char *line;
-    int i, len;
+    zval z_value;
+    zend_string *line;
+    int i;
 
     for (i = 0; i < count; ++i) {
-        if ((line = redis_sock_read(redis_sock, &len)) == NULL) {
+        if (redis_sock_read_zstr(redis_sock, &line) <= 0) {
             add_next_index_bool(z_tab, 0);
             continue;
         }
@@ -3408,12 +3497,12 @@ redis_mbulk_reply_loop(RedisSock *redis_sock, zval *z_tab, int count,
             (unserialize == UNSERIALIZE_VALS && i % 2 != 0)
         );
 
-        if (unwrap && redis_unpack(redis_sock, line, len, &z_unpacked)) {
-            add_next_index_zval(z_tab, &z_unpacked);
+        if (unwrap) {
+            redis_unpack_zstr(redis_sock, line, &z_value);
         } else {
-            redis_add_next_index_stringl(z_tab, line, len);
+            ZVAL_STR(&z_value, line);
         }
-        efree(line);
+        add_next_index_zval(z_tab, &z_value);
     }
 }
 
@@ -3472,8 +3561,8 @@ redis_mbulk_reply_zipped_raw_variant(RedisSock *redis_sock, zval *zret, int coun
  * keys with their returned values */
 PHP_REDIS_API int redis_mbulk_reply_assoc(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock, zval *z_tab, void *ctx)
 {
-    char *response;
-    int response_len, retval;
+    zend_string *response;
+    int retval;
     int i, numElems;
 
     zval *z_keys = ctx;
@@ -3493,18 +3582,16 @@ PHP_REDIS_API int redis_mbulk_reply_assoc(INTERNAL_FUNCTION_PARAMETERS, RedisSoc
 
     for(i = 0; i < numElems; ++i) {
         zend_string *tmp_str;
-        zend_string *zstr = zval_get_tmp_string(&z_keys[i], &tmp_str);
-        response = redis_sock_read(redis_sock, &response_len);
-        zval z_unpacked;
-        if (response != NULL) {
-            if (!redis_unpack(redis_sock, response, response_len, &z_unpacked)) {
-                ZVAL_STRINGL(&z_unpacked, response, response_len);
-            }
-            efree(response);
+        zend_string *key = zval_get_tmp_string(&z_keys[i], &tmp_str);
+
+        zval z_value;
+        if (redis_sock_read_zstr(redis_sock, &response) <= 0) {
+            ZVAL_FALSE(&z_value);
         } else {
-            ZVAL_FALSE(&z_unpacked);
+            redis_unpack_zstr(redis_sock, response, &z_value);
         }
-        zend_symtable_update(Z_ARRVAL(z_multi_result), zstr, &z_unpacked);
+
+        zend_symtable_update(Z_ARRVAL(z_multi_result), key, &z_value);
         zend_tmp_string_release(tmp_str);
     }
 
@@ -3713,31 +3800,32 @@ redis_compress(RedisSock *redis_sock, char **dst, size_t *dstlen, char *buf, siz
     return 0;
 }
 
-PHP_REDIS_API int
-redis_uncompress(RedisSock *redis_sock, char **dst, size_t *dstlen, const char *src, size_t len) {
+PHP_REDIS_API ZEND_RESULT_CODE
+redis_uncompress(RedisSock *redis_sock, zend_string **dest, const char *src, const size_t len) {
+    if (len == 0) {
+        return FAILURE;
+    }
+
     switch (redis_sock->compression) {
         case REDIS_COMPRESSION_LZF:
 #ifdef HAVE_REDIS_LZF
             {
-                char *data = NULL;
                 uint32_t res;
                 int i;
-
-                if (len == 0)
-                    break;
 
                 /* Grow our buffer until we succeed or get a non E2BIG error */
                 errno = E2BIG;
                 for (i = 2; errno == E2BIG; i *= 2) {
-                    data = erealloc(data, len * i);
-                    if ((res = lzf_decompress(src, len, data, len * i)) > 0) {
-                        *dst = data;
-                        *dstlen = res;
-                        return 1;
+                    *dest = i == 2 ? zend_string_alloc(len * i, 0) : zend_string_realloc(*dest, len * i, 0);
+                    if ((res = lzf_decompress(src, len, ZSTR_VAL(*dest), len * i)) > 0) {
+                        ZSTR_LEN(*dest) = res;
+                        ZSTR_VAL(*dest)[res] = '\0';
+                        return SUCCESS;
                     }
                 }
 
-                efree(data);
+                zend_string_efree(*dest);
+                *dest = NULL;
                 break;
             }
 #endif
@@ -3745,29 +3833,34 @@ redis_uncompress(RedisSock *redis_sock, char **dst, size_t *dstlen, const char *
         case REDIS_COMPRESSION_ZSTD:
 #ifdef HAVE_REDIS_ZSTD
             {
-                char *data;
-                unsigned long long zlen;
+                unsigned long long zlen, dstlen;
 
                 zlen = ZSTD_getFrameContentSize(src, len);
                 if (zlen == ZSTD_CONTENTSIZE_ERROR || zlen == ZSTD_CONTENTSIZE_UNKNOWN || zlen > INT_MAX)
                     break;
 
-                data = emalloc(zlen);
-                *dstlen = ZSTD_decompress(data, zlen, src, len);
-                if (ZSTD_isError(*dstlen) || *dstlen != zlen) {
-                    efree(data);
+                if (zlen == 0) {
+                    *dest = ZSTR_EMPTY_ALLOC();
+                    return SUCCESS;
+                }
+
+                *dest = zend_string_alloc(zlen, 0);
+                dstlen = ZSTD_decompress(ZSTR_VAL(*dest), zlen, src, len);
+                if (ZSTD_isError(dstlen) || dstlen != zlen) {
+                    zend_string_efree(*dest);
+                    *dest = NULL;
                     break;
                 }
 
-                *dst = data;
-                return 1;
+                ZSTR_VAL(*dest)[dstlen] = '\0';
+
+                return SUCCESS;
             }
 #endif
             break;
         case REDIS_COMPRESSION_LZ4:
 #ifdef HAVE_REDIS_LZ4
             {
-                char *data;
                 int datalen;
                 uint8_t lz4crc;
 
@@ -3790,23 +3883,26 @@ redis_uncompress(RedisSock *redis_sock, char **dst, size_t *dstlen, const char *
                 if (crc8((unsigned char*)&datalen, sizeof(datalen)) != lz4crc)
                     break;
 
-                /* Finally attempt decompression */
-                data = emalloc(datalen);
-                if (LZ4_decompress_safe(copy, data, copylen, datalen) > 0) {
-                    *dst = data;
-                    *dstlen = datalen;
-                    return 1;
+                if (datalen == 0) {
+                    *dest = ZSTR_EMPTY_ALLOC();
+                    return SUCCESS;
                 }
 
-                efree(data);
+                /* Finally attempt decompression */
+                *dest = zend_string_alloc(datalen, 0);
+                if (LZ4_decompress_safe(copy, ZSTR_VAL(*dest), copylen, datalen) > 0) {
+                    ZSTR_VAL(*dest)[datalen] = '\0';
+                    return SUCCESS;
+                }
+
+                zend_string_efree(*dest);
+                *dest = NULL;
             }
 #endif
             break;
     }
 
-    *dst = (char*)src;
-    *dstlen = len;
-    return 0;
+    return FAILURE;
 }
 
 PHP_REDIS_API int
@@ -3829,23 +3925,61 @@ redis_pack(RedisSock *redis_sock, zval *z, char **val, size_t *val_len) {
 
 PHP_REDIS_API int
 redis_unpack(RedisSock *redis_sock, const char *src, int srclen, zval *zdst) {
-    size_t len;
-    char *buf;
+    zend_string *uncompressed;
 
-    /* Uncompress, then unserialize */
-    if (redis_uncompress(redis_sock, &buf, &len, src, srclen)) {
-        if (!redis_unserialize(redis_sock, buf, len, zdst)) {
-            ZVAL_STRINGL_FAST(zdst, buf, len);
-        }
-        efree(buf);
+    if (srclen == 0) {
+        ZVAL_STR(zdst, ZSTR_EMPTY_ALLOC());
         return 1;
     }
 
-    return redis_unserialize(redis_sock, buf, len, zdst);
+    /* Uncompress, then unserialize */
+    if (redis_uncompress(redis_sock, &uncompressed, src, srclen) == SUCCESS) {
+        if (!redis_unserialize(redis_sock, ZSTR_VAL(uncompressed), ZSTR_LEN(uncompressed), zdst)) {
+            ZVAL_STR(zdst, uncompressed);
+        } else {
+            zend_string_release(uncompressed);
+        }
+        return 1;
+    }
+
+    if (!redis_unserialize(redis_sock, src, srclen, zdst)) {
+        ZVAL_STRINGL(zdst, src, srclen);
+    }
+
+    return 1;
+}
+
+/**
+* Converts provided zend_string to uncompressed and unserialized zval
+* This method handles memory cleanup for provided input string
+*/
+PHP_REDIS_API void
+redis_unpack_zstr(RedisSock *redis_sock, zend_string* input, zval *zdst) {
+    zend_string *uncompressed;
+
+    // No need to try uncompress empty string
+    if (ZSTR_LEN(input) == 0) {
+        zend_string_release(input);
+        ZVAL_STR(zdst, ZSTR_EMPTY_ALLOC());
+        return;
+    }
+
+    // Uncompress
+    if (redis_uncompress(redis_sock, &uncompressed, ZSTR_VAL(input), ZSTR_LEN(input)) == SUCCESS) {
+        zend_string_release(input);
+    } else {
+        uncompressed = input;
+    }
+
+    // Unserialize
+    if (redis_unserialize(redis_sock, ZSTR_VAL(uncompressed), ZSTR_LEN(uncompressed), zdst)) {
+        zend_string_release(uncompressed);
+    } else {
+        ZVAL_STR(zdst, uncompressed);
+    }
 }
 
 PHP_REDIS_API int
-
 redis_serialize(RedisSock *redis_sock, zval *z, char **val, size_t *val_len)
 {
     php_serialize_data_t ht;

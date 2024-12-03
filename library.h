@@ -62,6 +62,7 @@ PHP_REDIS_API int redis_spprintf(RedisSock *redis_sock, short *slot, char **ret,
 PHP_REDIS_API zend_string *redis_pool_spprintf(RedisSock *redis_sock, char *fmt, ...);
 
 PHP_REDIS_API char *redis_sock_read(RedisSock *redis_sock, int *buf_len);
+PHP_REDIS_API int redis_sock_read_zstr(RedisSock *redis_sock, zend_string **line);
 PHP_REDIS_API int redis_sock_gets(RedisSock *redis_sock, char *buf, int buf_size, size_t* line_len);
 PHP_REDIS_API int redis_1_response(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock, zval *z_tab, void *ctx);
 PHP_REDIS_API int redis_long_response(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock, zval* z_tab, void *ctx);
@@ -150,11 +151,12 @@ redis_unserialize(RedisSock *redis_sock, const char *val, int val_len, zval *z_r
 
 PHP_REDIS_API int
 redis_compress(RedisSock *redis_sock, char **dst, size_t *dstlen, char *buf, size_t len);
-PHP_REDIS_API int
-redis_uncompress(RedisSock *redis_sock, char **dst, size_t *dstlen, const char *src, size_t len);
+PHP_REDIS_API ZEND_RESULT_CODE
+redis_uncompress(RedisSock *redis_sock, zend_string **dest, const char *src, const size_t len);
 
 PHP_REDIS_API int redis_pack(RedisSock *redis_sock, zval *z, char **val, size_t *val_len);
 PHP_REDIS_API int redis_unpack(RedisSock *redis_sock, const char *val, int val_len, zval *z_ret);
+PHP_REDIS_API void redis_unpack_zstr(RedisSock *redis_sock, zend_string* input, zval *zdst);
 
 PHP_REDIS_API int
 redis_read_stream_messages(RedisSock *redis_sock, int count, zval *z_ret);

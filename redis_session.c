@@ -189,22 +189,6 @@ session_compress_data(RedisSock *redis_sock, char *data, size_t len,
     return 0;
 }
 
-/* Helper to uncompress session data */
-static int
-session_uncompress_data(RedisSock *redis_sock, char *data, size_t len,
-                                   char **decompressed_data, size_t *decompressed_len) {
-    if (redis_sock->compression) {
-        if(redis_uncompress(redis_sock, decompressed_data, decompressed_len, data, len)) {
-            return 1;
-        }
-    }
-
-    *decompressed_data = data;
-    *decompressed_len = len;
-
-    return 0;
-}
-
 /* Send a command to Redis.  Returns byte count written to socket (-1 on failure) */
 static int redis_simple_cmd(RedisSock *redis_sock, char *cmd, int cmdlen,
                               char **reply, int *replylen)
@@ -748,8 +732,9 @@ PS_UPDATE_TIMESTAMP_FUNC(redis)
  */
 PS_READ_FUNC(redis)
 {
-    char *resp, *cmd, *compressed_buf;
-    int resp_len, cmd_len, compressed_free;
+    zend_string *resp;
+    char *cmd, *compressed_buf;
+    int cmd_len, resp_status, compressed_free;
     const char *skey = ZSTR_VAL(key);
     size_t skeylen = ZSTR_LEN(key), compressed_len;
 
@@ -792,22 +777,22 @@ PS_READ_FUNC(redis)
     /* Read response from Redis.  If we get a NULL response from redis_sock_read
      * this can indicate an error, OR a "NULL bulk" reply (empty session data)
      * in which case we can reply with success. */
-    if ((resp = redis_sock_read(redis_sock, &resp_len)) == NULL && resp_len != -1) {
+    resp_status = redis_sock_read_zstr(redis_sock, &resp);
+    if (resp_status == 0) {
         php_error_docref(NULL, E_WARNING, "Error communicating with Redis server");
         return FAILURE;
     }
 
-    if (resp_len < 0) {
+    if (resp_status == -1 || ZSTR_LEN(resp) == 0) {
         *val = ZSTR_EMPTY_ALLOC();
     } else {
-        compressed_free = session_uncompress_data(redis_sock, resp, resp_len, &compressed_buf, &compressed_len);
-        *val = zend_string_init(compressed_buf, compressed_len, 0);
-        if (compressed_free) {
-            efree(compressed_buf); // Free the buffer allocated by redis_uncompress
+        if (redis_uncompress(redis_sock, val, ZSTR_VAL(resp), ZSTR_LEN(resp)) == SUCCESS) {
+            // release original response, return uncompressed one
+            zend_string_release(resp);
+        } else {
+            *val = resp;
         }
     }
-
-    efree(resp);
 
     return SUCCESS;
 }
@@ -1260,10 +1245,8 @@ PS_READ_FUNC(rediscluster) {
     if (reply->str == NULL) {
         *val = ZSTR_EMPTY_ALLOC();
     } else {
-        compressed_free = session_uncompress_data(c->flags, reply->str, reply->len, &compressed_buf, &compressed_len);
-        *val = zend_string_init(compressed_buf, compressed_len, 0);
-        if (compressed_free) {
-            efree(compressed_buf); // Free the buffer allocated by redis_uncompress
+        if (redis_uncompress(c->flags, val, reply->str, reply->len) != SUCCESS) {
+            *val = zend_string_init(reply->str, reply->len, 0);
         }
     }
 

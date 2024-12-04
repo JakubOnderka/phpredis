@@ -226,11 +226,9 @@ redis_sock_get_instance(zval *id, int no_throw)
 {
     redis_object *redis;
 
-    if (Z_TYPE_P(id) == IS_OBJECT) {
-        redis = PHPREDIS_ZVAL_GET_OBJECT(redis_object, id);
-        if (redis->sock) {
-            return redis->sock;
-        }
+    redis = PHPREDIS_ZVAL_GET_OBJECT(redis_object, id);
+    if (redis->sock) {
+        return redis->sock;
     }
     // Throw an exception unless we've been requested not to
     if (!no_throw) {

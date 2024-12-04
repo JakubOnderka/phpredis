@@ -1684,16 +1684,11 @@ PHP_REDIS_API void cluster_bulk_resp(INTERNAL_FUNCTION_PARAMETERS, redisCluster 
     }
 
     if (CLUSTER_IS_ATOMIC(c)) {
-        if (!redis_unpack(c->flags, resp, c->reply_len, return_value)) {
-            CLUSTER_RETURN_STRING(c, resp, c->reply_len);
-        }
+        redis_unpack(c->flags, resp, c->reply_len, return_value);
     } else {
         zval z_unpacked;
-        if (redis_unpack(c->flags, resp, c->reply_len, &z_unpacked)) {
-            add_next_index_zval(&c->multi_resp, &z_unpacked);
-        } else {
-            add_next_index_stringl(&c->multi_resp, resp, c->reply_len);
-        }
+        redis_unpack(c->flags, resp, c->reply_len, &z_unpacked);
+        add_next_index_zval(&c->multi_resp, &z_unpacked);
     }
     efree(resp);
 }
@@ -2823,11 +2818,8 @@ int mbulk_resp_loop(RedisSock *redis_sock, zval *z_result,
 
         if (line != NULL) {
             zval z_unpacked;
-            if (redis_unpack(redis_sock, line, line_len, &z_unpacked)) {
-                add_next_index_zval(z_result, &z_unpacked);
-            } else {
-                add_next_index_stringl(z_result, line, line_len);
-            }
+            redis_unpack(redis_sock, line, line_len, &z_unpacked);
+            add_next_index_zval(z_result, &z_unpacked);
             efree(line);
         } else {
             add_next_index_bool(z_result, 0);
@@ -2863,11 +2855,8 @@ int mbulk_resp_loop_zipstr(RedisSock *redis_sock, zval *z_result,
         } else {
             /* Attempt unpacking */
             zval z_unpacked;
-            if (redis_unpack(redis_sock, line, line_len, &z_unpacked)) {
-                add_assoc_zval(z_result, key, &z_unpacked);
-            } else {
-                add_assoc_stringl_ex(z_result, key, key_len, line, line_len);
-            }
+            redis_unpack(redis_sock, line, line_len, &z_unpacked);
+            add_assoc_zval(z_result, key, &z_unpacked);
 
             efree(line);
             efree(key);
@@ -2899,14 +2888,11 @@ int mbulk_resp_loop_zipdbl(RedisSock *redis_sock, zval *z_result,
                 key_len = line_len;
             } else {
                 zval zv, *z = &zv;
-                if (redis_unpack(redis_sock,key,key_len, z)) {
-                    zend_string *zstr = zval_get_string(z);
-                    add_assoc_double_ex(z_result, ZSTR_VAL(zstr), ZSTR_LEN(zstr), atof(line));
-                    zend_string_release(zstr);
-                    zval_dtor(z);
-                } else {
-                    add_assoc_double_ex(z_result, key, key_len, atof(line));
-                }
+                redis_unpack(redis_sock,key,key_len, z);
+                zend_string *zstr = zval_get_string(z);
+                add_assoc_double_ex(z_result, ZSTR_VAL(zstr), ZSTR_LEN(zstr), atof(line));
+                zend_string_release(zstr);
+                zval_dtor(z);
 
                 /* Free our key and line */
                 efree(key);
@@ -2933,11 +2919,8 @@ int mbulk_resp_loop_assoc(RedisSock *redis_sock, zval *z_result,
 
         if (line != NULL) {
             zval z_unpacked;
-            if (redis_unpack(redis_sock, line, line_len, &z_unpacked)) {
-                add_assoc_zval_ex(z_result, ZSTR_VAL(zstr), ZSTR_LEN(zstr), &z_unpacked);
-            } else {
-                add_assoc_stringl_ex(z_result, ZSTR_VAL(zstr), ZSTR_LEN(zstr), line, line_len);
-            }
+            redis_unpack(redis_sock, line, line_len, &z_unpacked);
+            add_assoc_zval_ex(z_result, ZSTR_VAL(zstr), ZSTR_LEN(zstr), &z_unpacked);
             efree(line);
         } else {
             add_assoc_bool_ex(z_result, ZSTR_VAL(zstr), ZSTR_LEN(zstr), 0);

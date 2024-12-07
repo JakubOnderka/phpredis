@@ -135,31 +135,40 @@ redis_sock_get_connection_pool(RedisSock *redis_sock)
     return pool;
 }
 
-/* Helper to reselect the proper DB number when we reconnect */
-static int reselect_db(RedisSock *redis_sock) {
-    char *cmd, *response;
-    int cmd_len, response_len;
+static int redis_sock_response_ok(RedisSock *redis_sock, char *buf, int buf_size) {
+    size_t len;
+    if (UNEXPECTED(redis_sock_gets(redis_sock, buf, buf_size - 1, &len) < 0)) {
+        return 0;
+    }
+    if (UNEXPECTED(redis_strncmp(buf, ZEND_STRL("+OK")))) {
+        if (buf[0] == '-') {
+            // Set error message in case of error
+            redis_sock_set_err(redis_sock, buf + 1, len);
+        }
+        return 0;
+    }
+    return 1;
+}
 
-    cmd_len = redis_spprintf(redis_sock, NULL, &cmd, "SELECT", "d",
-                             redis_sock->dbNumber);
+/* Helper to select the proper DB number */
+static int redis_select_db(RedisSock *redis_sock) {
+    char response[4096];
+    smart_string cmd = {0};
 
-    if (redis_sock_write(redis_sock, cmd, cmd_len) < 0) {
-        efree(cmd);
+    REDIS_CMD_INIT_SSTR_STATIC(&cmd, 1, "SELECT");
+    redis_cmd_append_sstr_long(&cmd, redis_sock->dbNumber);
+
+    if (redis_sock_write(redis_sock, cmd.c, cmd.len) < 0) {
+        efree(cmd.c);
         return -1;
     }
 
-    efree(cmd);
+    efree(cmd.c);
 
-    if ((response = redis_sock_read(redis_sock, &response_len)) == NULL) {
+    if (!redis_sock_response_ok(redis_sock, response, sizeof(response))) {
         return -1;
     }
 
-    if (redis_strncmp(response, ZEND_STRL("+OK"))) {
-        efree(response);
-        return -1;
-    }
-
-    efree(response);
     return 0;
 }
 
@@ -248,9 +257,7 @@ PHP_REDIS_API int redis_sock_auth(RedisSock *redis_sock) {
     }
     efree(cmd);
 
-    if (redis_sock_gets(redis_sock, inbuf, sizeof(inbuf) - 1, &len) < 0 ||
-        redis_strncmp(inbuf, ZEND_STRL("+OK")))
-    {
+    if (!redis_sock_response_ok(redis_sock, inbuf, sizeof(inbuf))) {
         return FAILURE;
     }
     return SUCCESS;
@@ -380,7 +387,7 @@ redis_check_eof(RedisSock *redis_sock, zend_bool no_retry, zend_bool no_throw)
                     redis_sock->status = REDIS_SOCK_STATUS_AUTHENTICATED;
 
                     /* If we're using a non-zero db, reselect it */
-                    if (redis_sock->dbNumber && reselect_db(redis_sock) != 0) {
+                    if (redis_sock->dbNumber && redis_select_db(redis_sock) != 0) {
                         errmsg = "SELECT failed while reconnecting";
                         break;
                     }
@@ -3152,7 +3159,7 @@ redis_sock_server_open(RedisSock *redis_sock)
             redis_sock->status = REDIS_SOCK_STATUS_AUTHENTICATED;
             // fall through
         case REDIS_SOCK_STATUS_AUTHENTICATED:
-            if (redis_sock->dbNumber && reselect_db(redis_sock) != SUCCESS) {
+            if (redis_sock->dbNumber && redis_select_db(redis_sock) != SUCCESS) {
                 break;
             }
             redis_sock->status = REDIS_SOCK_STATUS_READY;

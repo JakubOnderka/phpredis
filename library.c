@@ -2774,6 +2774,12 @@ redis_sock_configure(RedisSock *redis_sock, HashTable *opts)
                 return FAILURE;
             }
             redis_sock_set_auth_zval(redis_sock, val);
+        } else if (zend_string_equals_literal_ci(zkey, "database")) {
+            if (Z_TYPE_P(val) != IS_LONG || Z_LVAL_P(val) < 0 || Z_LVAL_P(val) > INT_MAX) {
+                REDIS_VALUE_EXCEPTION("Invalid database number");
+                return FAILURE;
+            }
+            redis_sock->dbNumber = Z_LVAL_P(val);
         } else if (zend_string_equals_literal_ci(zkey, "backoff")) {
             if (redis_sock_set_backoff(redis_sock, val) != SUCCESS) {
                 REDIS_VALUE_EXCEPTION("Invalid backoff options");

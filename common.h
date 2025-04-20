@@ -268,6 +268,14 @@ static inline int redis_strncmp(const char *s1, const char *s2, size_t n) {
     return strncmp(s1, s2, n);
 }
 
+// Returns 1 when zend_string starts with given second string
+static zend_always_inline int redis_str_stars_with(const zend_string *s1, const char *s2, size_t n) {
+    if (ZSTR_LEN(s1) < n) {
+        return 0;
+    }
+    return memcmp(s1, s2, n) == 0 ? 1 : 0;
+}
+
 /* Test if a zval is a string and (case insensitive) matches a static string */
 #define ZVAL_STRICMP_STATIC(zv, sstr) \
     REDIS_STRICMP_STATIC(Z_STRVAL_P(zv), Z_STRLEN_P(zv), sstr)

@@ -451,11 +451,9 @@ int redis_key_cmd(INTERNAL_FUNCTION_PARAMETERS, RedisSock *redis_sock,
     char *key;
     size_t key_len;
 
-    if (zend_parse_parameters(ZEND_NUM_ARGS(), "s", &key, &key_len)
-                             ==FAILURE)
-    {
-        return FAILURE;
-    }
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STRING(key, key_len);
+    ZEND_PARSE_PARAMETERS_END_EX(return FAILURE);
 
     *cmd_len = REDIS_CMD_SPPRINTF(cmd, kw, "k", key, key_len);
 
